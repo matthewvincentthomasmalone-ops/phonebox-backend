@@ -1,4 +1,8 @@
 const twilio = require("twilio");
+const { Redis } = require("@upstash/redis");
+
+// Automatically loads UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN from Vercel
+const redis = Redis.fromEnv();
 
 function withCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -14,14 +18,13 @@ module.exports = async (req, res) => {
     res.end();
     return;
   }
+
   if (req.method !== "POST") {
     res.statusCode = 405;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ ok: false, error: "Method Not Allowed" }));
     return;
   }
-
-  global.__PHONEBOX__ = global.__PHONEBOX__ || { activeByEndpoint: new Map() };
 
   // Read JSON body
   const buffers = [];
@@ -30,56 +33,54 @@ module.exports = async (req, res) => {
   const body = bodyRaw ? JSON.parse(bodyRaw) : {};
 
   const endpointNumber = body.endpointNumber;
-  const callSidFromClient = body.callSid;
+  let callSid = body.callSid;
 
-  let callSid = callSidFromClient;
+  // --- NEW REDIS LOGIC ---
+  // If the frontend didn't send a CallSid, try to fetch it from the database
   if (!callSid && endpointNumber) {
-    const active = global.__PHONEBOX__.activeByEndpoint.get(endpointNumber);
-    callSid = active && active.callSid;
+    const cachedData = await redis.get(`call:${endpointNumber}`);
+    if (cachedData) {
+      // Data in Redis is stored as a stringified object in incoming.js
+      callSid = cachedData.callSid;
+    }
   }
 
   if (!callSid) {
     res.statusCode = 400;
     res.setHeader("Content-Type", "application/json");
-    res.end(
-      JSON.stringify({
-        ok: false,
-        error: "Missing callSid (or no active call found for endpointNumber).",
-      })
-    );
+    res.end(JSON.stringify({ ok: false, error: "No active call found for this number." }));
     return;
   }
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
+
   if (!accountSid || !authToken) {
     res.statusCode = 500;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ ok: false, error: "Twilio env vars not set." }));
+    res.end(JSON.stringify({ ok: false, error: "Twilio credentials missing in Vercel." }));
     return;
   }
 
   const client = twilio(accountSid, authToken);
-
   const host = req.headers["x-forwarded-host"] || req.headers.host;
   const proto = (req.headers["x-forwarded-proto"] || "https").toString();
   const baseUrl = `${proto}://${host}`;
-
-  const playUrl = `${baseUrl}/api/play?endpointNumber=${encodeURIComponent(
-    endpointNumber || ""
-  )}`;
+  const playUrl = `${baseUrl}/api/play?endpointNumber=${encodeURIComponent(endpointNumber || "")}`;
 
   try {
+    // 1. Tell Twilio to redirect the live call to our /api/play greeting
     await client.calls(callSid).update({ url: playUrl, method: "POST" });
 
-    if (endpointNumber) global.__PHONEBOX__.activeByEndpoint.delete(endpointNumber);
+    // 2. Clear the call from Redis so it doesn't stay "ringing" in the UI
+    if (endpointNumber) {
+      await redis.del(`call:${endpointNumber}`);
+    }
 
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ ok: true, callSid, playUrl }));
+    res.end(JSON.stringify({ ok: true, callSid }));
   } catch (err) {
     res.statusCode = 500;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ ok: false, error: err.message || String(err) }));
+    res.end(JSON.stringify({ ok: false, error: err.message }));
   }
 };
