@@ -1,10 +1,10 @@
+const { Redis } = require("@upstash/redis");
 const querystring = require("node:querystring");
 
-const xml = (str) => `<?xml version="1.0" encoding="UTF-8"?>\n${str}`;
+// Automatically loads KV_REST_API_URL and KV_REST_API_TOKEN from Vercel
+const redis = Redis.fromEnv();
 
-global.__PHONEBOX__ = global.__PHONEBOX__ || {
-  activeByEndpoint: new Map(),
-};
+const xml = (str) => `<?xml version="1.0" encoding="UTF-8"?>\n${str}`;
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -24,18 +24,18 @@ module.exports = async (req, res) => {
 
   const raw = await readBody(req);
   const params = querystring.parse(raw);
-
   const callSid = String(params.CallSid || "");
   const from = String(params.From || "");
   const to = String(params.To || "");
 
   if (callSid && to) {
-    global.__PHONEBOX__.activeByEndpoint.set(to, {
+    // Store the call in Redis for 10 minutes (600 seconds)
+    await redis.set(`call:${to}`, JSON.stringify({
       callSid,
       from,
       to,
       startedAt: Date.now(),
-    });
+    }), { ex: 600 });
   }
 
   res.setHeader("Content-Type", "text/xml");
