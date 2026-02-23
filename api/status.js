@@ -4,24 +4,21 @@ module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "application/json");
 
+  // Manually grab variables to ensure they exist
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-  // Debug check: This will tell us if the variables are actually reaching the code
   if (!url || !token) {
     res.statusCode = 500;
     return res.end(JSON.stringify({ 
       ok: false, 
-      error: "Environment variables missing at runtime",
-      missingUrl: !url,
-      missingToken: !token
+      error: "Critical: Database credentials missing in Vercel environment",
+      debug: { urlMissing: !url, tokenMissing: !token }
     }));
   }
 
   try {
-    // Manually initialize instead of using fromEnv()
     const redis = new Redis({ url, token });
-    
     const keys = await redis.keys("call:*");
     const calls = {};
 
