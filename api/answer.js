@@ -1,9 +1,6 @@
 const twilio = require("twilio");
 const { Redis } = require("@upstash/redis");
 
-// Automatically loads UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN from Vercel
-const redis = Redis.fromEnv();
-
 function withCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
@@ -13,74 +10,49 @@ function withCors(res) {
 module.exports = async (req, res) => {
   withCors(res);
 
-  if (req.method === "OPTIONS") {
-    res.statusCode = 204;
-    res.end();
-    return;
+  if (req.method === "OPTIONS") return res.status(204).end();
+
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (!url || !token) {
+    return res.status(500).json({ ok: false, error: "Database credentials missing" });
   }
 
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ ok: false, error: "Method Not Allowed" }));
-    return;
-  }
-
-  // Read JSON body
+  const redis = new Redis({ url, token });
+  
+  // Read body manually
   const buffers = [];
   for await (const chunk of req) buffers.push(chunk);
-  const bodyRaw = Buffer.concat(buffers).toString("utf8");
-  const body = bodyRaw ? JSON.parse(bodyRaw) : {};
+  const body = JSON.parse(Buffer.concat(buffers).toString() || "{}");
 
   const endpointNumber = body.endpointNumber;
   let callSid = body.callSid;
 
-  // --- NEW REDIS LOGIC ---
-  // If the frontend didn't send a CallSid, try to fetch it from the database
+  // Retrieve CallSid from Redis if it wasn't provided by the frontend
   if (!callSid && endpointNumber) {
-    const cachedData = await redis.get(`call:${endpointNumber}`);
-    if (cachedData) {
-      // Data in Redis is stored as a stringified object in incoming.js
-      callSid = cachedData.callSid;
-    }
+    const data = await redis.get(`call:${endpointNumber}`);
+    if (data) callSid = data.callSid;
   }
 
   if (!callSid) {
-    res.statusCode = 400;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ ok: false, error: "No active call found for this number." }));
-    return;
+    return res.status(400).json({ ok: false, error: "No active CallSid found" });
   }
 
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-
-  if (!accountSid || !authToken) {
-    res.statusCode = 500;
-    res.end(JSON.stringify({ ok: false, error: "Twilio credentials missing in Vercel." }));
-    return;
-  }
-
-  const client = twilio(accountSid, authToken);
+  const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
   const host = req.headers["x-forwarded-host"] || req.headers.host;
-  const proto = (req.headers["x-forwarded-proto"] || "https").toString();
-  const baseUrl = `${proto}://${host}`;
-  const playUrl = `${baseUrl}/api/play?endpointNumber=${encodeURIComponent(endpointNumber || "")}`;
+  const proto = req.headers["x-forwarded-proto"] || "https";
+  const playUrl = `${proto}://${host}/api/play?endpointNumber=${encodeURIComponent(endpointNumber || "")}`;
 
   try {
-    // 1. Tell Twilio to redirect the live call to our /api/play greeting
+    // Redirect the call to play the business-specific message
     await client.calls(callSid).update({ url: playUrl, method: "POST" });
+    
+    // Clear the call from Redis so it stops ringing in the UI
+    if (endpointNumber) await redis.del(`call:${endpointNumber}`);
 
-    // 2. Clear the call from Redis so it doesn't stay "ringing" in the UI
-    if (endpointNumber) {
-      await redis.del(`call:${endpointNumber}`);
-    }
-
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ ok: true, callSid }));
+    res.status(200).json({ ok: true });
   } catch (err) {
-    res.statusCode = 500;
-    res.end(JSON.stringify({ ok: false, error: err.message }));
+    res.status(500).json({ ok: false, error: err.message });
   }
 };
