@@ -19,8 +19,8 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const url = process.env.REDIS_REST_URL;
+  const token = process.env.REDIS_REST_TOKEN;
 
   if (!url || !token) {
     res.statusCode = 500;
@@ -47,3 +47,4 @@ module.exports = async (req, res) => {
   res.statusCode = 200;
   res.end(xml(`<Response><Say voice="alice">Please hold while we connect you.</Say><Pause length="600"/></Response>`));
 };
+
