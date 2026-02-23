@@ -1,13 +1,27 @@
 const { Redis } = require("@upstash/redis");
-const redis = Redis.fromEnv();
 
 module.exports = async (req, res) => {
-  // Enable CORS so your GitHub site can read the data
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "application/json");
 
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  // Debug check: This will tell us if the variables are actually reaching the code
+  if (!url || !token) {
+    res.statusCode = 500;
+    return res.end(JSON.stringify({ 
+      ok: false, 
+      error: "Environment variables missing at runtime",
+      missingUrl: !url,
+      missingToken: !token
+    }));
+  }
+
   try {
-    // Find all active call keys
+    // Manually initialize instead of using fromEnv()
+    const redis = new Redis({ url, token });
+    
     const keys = await redis.keys("call:*");
     const calls = {};
 
