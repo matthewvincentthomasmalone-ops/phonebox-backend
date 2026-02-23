@@ -1,27 +1,26 @@
+const { Redis } = require("@upstash/redis");
+const redis = Redis.fromEnv();
+
 module.exports = async (req, res) => {
-  // 1. Enable CORS so your GitHub Pages site can read this data
+  // Enable CORS so your GitHub site can read the data
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  // Handle preflight request
-  if (req.method === "OPTIONS") {
-    res.status(204).end();
-    return;
-  }
-
-  // 2. Access the shared memory object used by incoming.js
-  // We use the same global name defined in your other files
-  const phonebox = global.__PHONEBOX__ || { activeByEndpoint: new Map() }; [cite: 19, 20]
-  
-  // 3. Convert the Map to a standard Object for JSON transmission
-  const activeCalls = Object.fromEntries(phonebox.activeByEndpoint); [cite: 20, 24]
-
-  // 4. Return the data to your frontend
   res.setHeader("Content-Type", "application/json");
-  res.status(200).json({
-    ok: true,
-    calls: activeCalls,
-    serverTime: Date.now()
-  });
+
+  try {
+    // Find all active call keys
+    const keys = await redis.keys("call:*");
+    const calls = {};
+
+    for (const key of keys) {
+      const number = key.replace("call:", "");
+      const data = await redis.get(key);
+      calls[number] = data;
+    }
+
+    res.statusCode = 200;
+    res.end(JSON.stringify({ ok: true, calls }));
+  } catch (err) {
+    res.statusCode = 500;
+    res.end(JSON.stringify({ ok: false, error: err.message }));
+  }
 };
