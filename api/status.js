@@ -4,8 +4,8 @@ module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "application/json");
 
-  const url = process.env.REDIS_REST_URL;
-  const token = process.env.REDIS_REST_TOKEN;
+  const url = process.env.UPSTASH_URL;
+  const token = process.env.UPSTASH_TOKEN;
 
   // --- DEBUG SECTION ---
   if (!url || !token) {
