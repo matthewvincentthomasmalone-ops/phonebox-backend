@@ -12,6 +12,12 @@ module.exports = async (req, res) => {
   const url = process.env.UPSTASH_URL;
   const token = process.env.UPSTASH_TOKEN;
 
+  if (!finalCallSid) {
+    // Even if no SID is found, we MUST wipe Redis for this number to stop the UI ringing
+    if (endpointNumber) await redis.del(`call:${endpointNumber}`);
+    return res.status(200).json({ ok: true, note: "Ghost cleared without Twilio action" });
+  }
+  
   if (!url || !token) {
     return res.status(500).json({ ok: false, error: "Database credentials missing" });
   }
@@ -32,9 +38,10 @@ module.exports = async (req, res) => {
   }
 
   if (!finalCallSid) {
-    // If no call found, still try to clear Redis to stop UI "Ghosting"
-    if (endpointNumber) await redis.del(`call:${endpointNumber}`);
-    return res.status(400).json({ ok: false, error: "No active CallSid found." });
+   // Clear Redis and tell the GUI it's okay to stop ringing
+  if (endpointNumber) await redis.del(`call:${endpointNumber}`);
+  return res.status(200).json({ ok: true, note: "Ghost cleared" });
+}
   }
 
   const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
