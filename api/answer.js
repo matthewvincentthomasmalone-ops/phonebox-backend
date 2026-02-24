@@ -10,51 +10,63 @@ function withCors(res) {
 module.exports = async (req, res) => {
   withCors(res);
 
-  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
 
+  // Manual Database Connection
   const url = process.env.UPSTASH_URL;
   const token = process.env.UPSTASH_TOKEN;
 
   if (!url || !token) {
-    return res.status(500).json({ ok: false, error: "Database credentials missing" });
+    res.statusCode = 500;
+    return res.end(JSON.stringify({ ok: false, error: "Database credentials missing" }));
   }
 
   const redis = new Redis({ url, token });
-  
-  // Read body manually
+
+  // Read JSON body
   const buffers = [];
   for await (const chunk of req) buffers.push(chunk);
-  const body = JSON.parse(Buffer.concat(buffers).toString() || "{}");
+  const bodyRaw = Buffer.concat(buffers).toString("utf8");
+  const body = bodyRaw ? JSON.parse(bodyRaw) : {};
 
   const endpointNumber = body.endpointNumber;
   let callSid = body.callSid;
 
-  // Retrieve CallSid from Redis if it wasn't provided by the frontend
+  // Fetch CallSid from Redis if missing
   if (!callSid && endpointNumber) {
-    const data = await redis.get(`call:${endpointNumber}`);
-    if (data) callSid = data.callSid;
+    const cachedData = await redis.get(`call:${endpointNumber}`);
+    if (cachedData) {
+      callSid = cachedData.callSid;
+    }
   }
 
   if (!callSid) {
-    return res.status(400).json({ ok: false, error: "No active CallSid found" });
+    res.statusCode = 400;
+    return res.end(JSON.stringify({ ok: false, error: "No active call found for this number." }));
   }
 
   const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
   const host = req.headers["x-forwarded-host"] || req.headers.host;
-  const proto = req.headers["x-forwarded-proto"] || "https";
+  const proto = (req.headers["x-forwarded-proto"] || "https").toString();
   const playUrl = `${proto}://${host}/api/play?endpointNumber=${encodeURIComponent(endpointNumber || "")}`;
 
   try {
-    // Redirect the call to play the business-specific message
+    // Redirect call to greeting
     await client.calls(callSid).update({ url: playUrl, method: "POST" });
-    
-    // Clear the call from Redis so it stops ringing in the UI
-    if (endpointNumber) await redis.del(`call:${endpointNumber}`);
 
-    res.status(200).json({ ok: true });
+    // Clear from Redis to stop the "Ringing" state in UI
+    if (endpointNumber) {
+      await redis.del(`call:${endpointNumber}`);
+    }
+
+    res.statusCode = 200;
+    res.end(JSON.stringify({ ok: true, callSid }));
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    res.statusCode = 500;
+    res.end(JSON.stringify({ ok: false, error: err.message }));
   }
 };
-
-
