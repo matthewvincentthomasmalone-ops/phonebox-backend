@@ -40,13 +40,16 @@ module.exports = async (req, res) => {
   const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
   try {
-    // End the call in Twilio
+    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    // Attempt to hang up the live call
     await client.calls(finalCallSid).update({ status: "completed" });
-    
-    // Crucial: Remove from Redis so the UI tile clears
+  } catch (err) {
+    console.log("Twilio call already gone, proceeding to clear DB...");
+  } finally {
+    // CRITICAL: Always delete the key from Redis, regardless of Twilio's state
     if (endpointNumber) await redis.del(`call:${endpointNumber}`);
-
     res.status(200).json({ ok: true });
+  }
   } catch (err) {
     // Forced cleanup: delete Redis key even if Twilio fails
     if (endpointNumber) await redis.del(`call:${endpointNumber}`);
