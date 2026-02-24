@@ -16,56 +16,50 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Manual Database Connection
-  const url = process.env.UPSTASH_URL;
-  const token = process.env.UPSTASH_TOKEN;
+  const redis = new Redis({ 
+    url: process.env.UPSTASH_URL, 
+    token: process.env.UPSTASH_TOKEN 
+  });
 
-  if (!url || !token) {
-    res.statusCode = 500;
-    return res.end(JSON.stringify({ ok: false, error: "Database credentials missing" }));
-  }
-
-  const redis = new Redis({ url, token });
-
-  // Read JSON body
   const buffers = [];
   for await (const chunk of req) buffers.push(chunk);
   const bodyRaw = Buffer.concat(buffers).toString("utf8");
   const body = bodyRaw ? JSON.parse(bodyRaw) : {};
 
-  const endpointNumber = body.endpointNumber;
-  let callSid = body.callSid;
-
-  // Fetch CallSid from Redis if missing
-  if (!callSid && endpointNumber) {
-    const cachedData = await redis.get(`call:${endpointNumber}`);
-    if (cachedData) {
-      callSid = cachedData.callSid;
-    }
-  }
+  const { endpointNumber, callSid } = body;
 
   if (!callSid) {
     res.statusCode = 400;
-    return res.end(JSON.stringify({ ok: false, error: "No active call found for this number." }));
+    return res.end(JSON.stringify({ ok: false, error: "No active CallSid provided" }));
   }
 
   const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  const proto = (req.headers["x-forwarded-proto"] || "https").toString();
-  const playUrl = `${proto}://${host}/api/play?endpointNumber=${encodeURIComponent(endpointNumber || "")}`;
 
   try {
-    // Redirect call to greeting
-    await client.calls(callSid).update({ url: playUrl, method: "POST" });
+    // Generate TwiML to move the CALLER into a Conference
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const response = new VoiceResponse();
+    const dial = response.dial();
+    // The caller enters a room named after their own SID
+    dial.conference({
+      waitUrl: '', // Stops the default music once they are 'answered'
+      beep: false,
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true
+    }, callSid);
 
-    // Clear from Redis to stop the "Ringing" state in UI
+    // Update the live call with this TwiML
+    await client.calls(callSid).update({ twiml: response.toString() });
+
+    // Remove from 'Ringing' status in Redis
     if (endpointNumber) {
       await redis.del(`call:${endpointNumber}`);
     }
 
     res.statusCode = 200;
-    res.end(JSON.stringify({ ok: true, callSid }));
+    res.end(JSON.stringify({ ok: true, message: "Caller moved to conference" }));
   } catch (err) {
+    console.error("Answer Error:", err.message);
     res.statusCode = 500;
     res.end(JSON.stringify({ ok: false, error: err.message }));
   }
