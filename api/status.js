@@ -4,16 +4,20 @@ module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "application/json");
 
-  // Manually grab variables to ensure they exist
   const url = process.env.REDIS_REST_URL;
   const token = process.env.REDIS_REST_TOKEN;
 
+  // --- DEBUG SECTION ---
   if (!url || !token) {
     res.statusCode = 500;
+    // This line helps identify every variable Vercel is actually passing to the code
+    const visibleKeys = Object.keys(process.env).filter(k => !k.startsWith('VERCEL') && !k.startsWith('AWS'));
+    
     return res.end(JSON.stringify({ 
       ok: false, 
-      error: "Critical: Database credentials missing in Vercel environment",
-      debug: { urlMissing: !url, tokenMissing: !token }
+      error: "Credentials missing at runtime",
+      detectedVariables: visibleKeys,
+      lookingFor: ["REDIS_REST_URL", "REDIS_REST_TOKEN"]
     }));
   }
 
