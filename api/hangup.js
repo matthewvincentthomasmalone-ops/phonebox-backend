@@ -49,7 +49,7 @@ module.exports = async (req, res) => {
     // CRITICAL: Always delete the key from Redis, regardless of Twilio's state
     if (endpointNumber) await redis.del(`call:${endpointNumber}`);
     res.status(200).json({ ok: true });
-  }
+    
   } catch (err) {
     // Forced cleanup: delete Redis key even if Twilio fails
     if (endpointNumber) await redis.del(`call:${endpointNumber}`);
