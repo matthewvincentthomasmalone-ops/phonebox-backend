@@ -17,7 +17,7 @@ module.exports = async (req, res) => {
       ok: false, 
       error: "Credentials missing at runtime",
       detectedVariables: visibleKeys,
-      lookingFor: ["REDIS_REST_URL", "REDIS_REST_TOKEN"]
+      lookingFor: ["UPSTASH_URL", "UPSTASH_TOKEN"]
     }));
   }
 
