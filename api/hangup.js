@@ -2,64 +2,57 @@ const twilio = require("twilio");
 const { Redis } = require("@upstash/redis");
 
 module.exports = async (req, res) => {
+  // CORS Headers
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(204).end();
 
-  // Manual Database Connection
-  const url = process.env.UPSTASH_URL;
-  const token = process.env.UPSTASH_TOKEN;
+  const redis = new Redis({
+    url: process.env.UPSTASH_URL,
+    token: process.env.UPSTASH_TOKEN,
+  });
 
-  if (!finalCallSid) {
-    // Even if no SID is found, we MUST wipe Redis for this number to stop the UI ringing
-    if (endpointNumber) await redis.del(`call:${endpointNumber}`);
-    return res.status(200).json({ ok: true, note: "Ghost cleared without Twilio action" });
-  }
-  
-  if (!url || !token) {
-    return res.status(500).json({ ok: false, error: "Database credentials missing" });
-  }
-
-  const redis = new Redis({ url, token });
-
+  // Collect request body
   const buffers = [];
   for await (const chunk of req) buffers.push(chunk);
-  const body = JSON.parse(Buffer.concat(buffers).toString() || "{}");
+  const data = JSON.parse(Buffer.concat(buffers).toString() || "{}");
+  const { endpointNumber, callSid } = data;
 
-  const { endpointNumber, callSid } = body;
+  // 1. Check Redis for a fallback SID if the frontend didn't send one
   let finalCallSid = callSid;
-
-  // Try to find the CallSid in database if button didn't send it
   if (!finalCallSid && endpointNumber) {
-    const cachedData = await redis.get(`call:${endpointNumber}`);
-    if (cachedData) finalCallSid = cachedData.callSid;
+    const cached = await redis.get(`call:${endpointNumber}`);
+    if (cached) finalCallSid = cached.callSid;
   }
 
+  // 2. Clear the UI state regardless of whether Twilio succeeds
+  // This prevents "Ghost Tiles" from staying red
   if (!finalCallSid) {
-   // Clear Redis and tell the GUI it's okay to stop ringing
-  if (endpointNumber) await redis.del(`call:${endpointNumber}`);
-  return res.status(200).json({ ok: true, note: "Ghost cleared" });
-}
+    if (endpointNumber) await redis.del(`call:${endpointNumber}`);
+    return res.status(200).json({ ok: true, note: "Local state cleared" });
   }
-
-  const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
   try {
-    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    // Attempt to hang up the live call
+    const client = twilio(
+      process.env.TWILIO_ACCOUNT_SID,
+      process.env.TWILIO_AUTH_TOKEN
+    );
+
+    // 3. Attempt to kill the call in Twilio
     await client.calls(finalCallSid).update({ status: "completed" });
+    console.log(`Terminated SID: ${finalCallSid}`);
+
   } catch (err) {
-    console.log("Twilio call already gone, proceeding to clear DB...");
+    // We catch the error but return 200 OK so the GUI clears the tile.
+    // Error 21220 means the call is already over.
+    console.error("Twilio termination error (call likely already ended):", err.message);
   } finally {
-    // CRITICAL: Always delete the key from Redis, regardless of Twilio's state
-    if (endpointNumber) await redis.del(`call:${endpointNumber}`);
-    res.status(200).json({ ok: true });
-    
-  } catch (err) {
-    // Forced cleanup: delete Redis key even if Twilio fails
-    if (endpointNumber) await redis.del(`call:${endpointNumber}`);
-    res.status(500).json({ ok: false, error: err.message });
+    // 4. Final Cleanup: Always wipe the Redis key to stop the dashboard ringing
+    if (endpointNumber) {
+      await redis.del(`call:${endpointNumber}`);
+    }
+    return res.status(200).json({ ok: true, message: "Endpoint reset to idle" });
   }
 };
