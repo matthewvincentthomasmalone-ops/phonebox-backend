@@ -8,6 +8,7 @@ module.exports = async (req, res) => {
 
   if (req.method === "OPTIONS") return res.status(204).end();
 
+  // Manual Database Connection
   const url = process.env.UPSTASH_URL;
   const token = process.env.UPSTASH_TOKEN;
 
@@ -24,25 +25,31 @@ module.exports = async (req, res) => {
   const { endpointNumber, callSid } = body;
   let finalCallSid = callSid;
 
+  // Try to find the CallSid in database if button didn't send it
   if (!finalCallSid && endpointNumber) {
-    const data = await redis.get(`call:${endpointNumber}`);
-    if (data) finalCallSid = data.callSid;
+    const cachedData = await redis.get(`call:${endpointNumber}`);
+    if (cachedData) finalCallSid = cachedData.callSid;
   }
 
   if (!finalCallSid) {
-    return res.status(400).json({ ok: false, error: "Call not found" });
+    // If no call found, still try to clear Redis to stop UI "Ghosting"
+    if (endpointNumber) await redis.del(`call:${endpointNumber}`);
+    return res.status(400).json({ ok: false, error: "No active CallSid found." });
   }
 
   const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
   try {
-    // Tell Twilio to hang up the call
+    // End the call in Twilio
     await client.calls(finalCallSid).update({ status: "completed" });
     
+    // Crucial: Remove from Redis so the UI tile clears
     if (endpointNumber) await redis.del(`call:${endpointNumber}`);
 
     res.status(200).json({ ok: true });
   } catch (err) {
+    // Forced cleanup: delete Redis key even if Twilio fails
+    if (endpointNumber) await redis.del(`call:${endpointNumber}`);
     res.status(500).json({ ok: false, error: err.message });
   }
 };
