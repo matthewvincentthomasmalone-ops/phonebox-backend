@@ -8,8 +8,8 @@ module.exports = async (req, res) => {
 
   if (req.method === "OPTIONS") return res.status(204).end();
 
-  const url = process.env.REDIS_REST_URL;
-  const token = process.env.REDIS_REST_TOKEN;
+  const url = process.env.UPSTASH_URL;
+  const token = process.env.UPSTASH_TOKEN;
 
   if (!url || !token) {
     return res.status(500).json({ ok: false, error: "Database credentials missing" });
